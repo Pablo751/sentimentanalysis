@@ -1,14 +1,18 @@
-import { createContext, useContext, useState, ReactNode, useCallback } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { ApiError, apiRequest } from "@/lib/api";
 
 type DateRange = "7d" | "30d" | "90d";
 type DocStatus = "Pending Approval" | "Approved" | "Sent to Client";
 
-const AUTH_SESSION_KEY = "apex-authenticated";
-const AUTH_EMAIL_KEY = "apex-auth-email";
-
 interface LoginResult {
   ok: boolean;
   error?: string;
+}
+
+interface SessionResponse {
+  authenticated: boolean;
+  email: string;
+  authConfigured: boolean;
 }
 
 export interface RepositoryDocument {
@@ -62,11 +66,12 @@ interface AppState {
   setShowRepoSuccess: (v: boolean) => void;
   hasSeenLoader: boolean;
   setHasSeenLoader: (v: boolean) => void;
+  authLoading: boolean;
   isAuthenticated: boolean;
   authEmail: string;
   isAuthConfigured: boolean;
-  login: (email: string, password: string) => LoginResult;
-  logout: () => void;
+  login: (email: string, password: string) => Promise<LoginResult>;
+  logout: () => Promise<void>;
 }
 
 const INITIAL_DOCS: RepositoryDocument[] = [
@@ -129,14 +134,6 @@ function getInitialDocuments(): RepositoryDocument[] {
   return INITIAL_DOCS.map((doc) => ({ ...doc }));
 }
 
-function readSessionValue(key: string): string | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  return window.sessionStorage.getItem(key);
-}
-
 const AppContext = createContext<AppState | null>(null);
 
 export const useAppState = () => {
@@ -146,8 +143,6 @@ export const useAppState = () => {
 };
 
 export const AppProvider = ({ children }: { children: ReactNode }) => {
-  const authPassword = import.meta.env.VITE_APP_PASSWORD?.trim();
-  const allowedEmail = import.meta.env.VITE_APP_EMAIL?.trim().toLowerCase();
   const [generatedDocument, setGeneratedDocument] = useState<string | null>(null);
   const [evaluation, setEvaluation] = useState<EvaluationData | null>(null);
   const [documentApproved, setDocumentApproved] = useState(false);
@@ -158,9 +153,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [viewingDocId, setViewingDocId] = useState<string | null>(null);
   const [showRepoSuccess, setShowRepoSuccess] = useState(false);
   const [hasSeenLoader, setHasSeenLoader] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(() => readSessionValue(AUTH_SESSION_KEY) === "true");
-  const [authEmail, setAuthEmail] = useState(() => readSessionValue(AUTH_EMAIL_KEY) ?? "");
-  const isAuthConfigured = Boolean(authPassword);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [isAuthConfigured, setIsAuthConfigured] = useState(false);
 
   const addDocument = useCallback((doc: RepositoryDocument) => {
     setDocuments((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
@@ -183,41 +179,76 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setHasSeenLoader(false);
   }, []);
 
-  const login = useCallback((email: string, password: string): LoginResult => {
-    const normalizedEmail = email.trim().toLowerCase();
+  useEffect(() => {
+    let cancelled = false;
 
-    if (!authPassword) {
-      return { ok: false, error: "Set VITE_APP_PASSWORD before using the private login." };
+    const loadSession = async () => {
+      try {
+        const data = await apiRequest<SessionResponse>("/api/auth/session");
+        if (cancelled) {
+          return;
+        }
+
+        setIsAuthenticated(data.authenticated);
+        setAuthEmail(data.email || "");
+        setIsAuthConfigured(data.authConfigured);
+      } catch {
+        if (cancelled) {
+          return;
+        }
+
+        setIsAuthenticated(false);
+        setAuthEmail("");
+        setIsAuthConfigured(false);
+      } finally {
+        if (!cancelled) {
+          setAuthLoading(false);
+        }
+      }
+    };
+
+    void loadSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
+    try {
+      const data = await apiRequest<SessionResponse>("/api/auth/login", {
+        method: "POST",
+        json: { email, password },
+      });
+
+      setIsAuthenticated(data.authenticated);
+      setAuthEmail(data.email || email.trim());
+      setIsAuthConfigured(data.authConfigured);
+
+      return { ok: true };
+    } catch (error) {
+      if (error instanceof ApiError) {
+        if (error.status === 503) {
+          setIsAuthConfigured(false);
+        }
+
+        return { ok: false, error: error.message };
+      }
+
+      return { ok: false, error: "Unable to reach the server." };
+    }
+  }, []);
+
+  const logout = useCallback(async () => {
+    try {
+      await apiRequest<void>("/api/auth/logout", { method: "POST" });
+    } catch {
+      // Even if the request fails, clear local UI state.
     }
 
-    if (allowedEmail && normalizedEmail !== allowedEmail) {
-      return { ok: false, error: "This email is not authorized for this workspace." };
-    }
-
-    if (password !== authPassword) {
-      return { ok: false, error: "Incorrect password." };
-    }
-
-    setAuthEmail(email.trim());
-    setIsAuthenticated(true);
-
-    if (typeof window !== "undefined") {
-      window.sessionStorage.setItem(AUTH_SESSION_KEY, "true");
-      window.sessionStorage.setItem(AUTH_EMAIL_KEY, email.trim());
-    }
-
-    return { ok: true };
-  }, [allowedEmail, authPassword]);
-
-  const logout = useCallback(() => {
     resetState();
     setAuthEmail("");
     setIsAuthenticated(false);
-
-    if (typeof window !== "undefined") {
-      window.sessionStorage.removeItem(AUTH_SESSION_KEY);
-      window.sessionStorage.removeItem(AUTH_EMAIL_KEY);
-    }
   }, [resetState]);
 
   return (
@@ -234,6 +265,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         viewingDocId, setViewingDocId,
         showRepoSuccess, setShowRepoSuccess,
         hasSeenLoader, setHasSeenLoader,
+        authLoading,
         isAuthenticated,
         authEmail,
         isAuthConfigured,

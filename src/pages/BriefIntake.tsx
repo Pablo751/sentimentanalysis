@@ -2,7 +2,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAppState } from "@/context/AppContext";
 import type { EvaluationData } from "@/context/AppContext";
-import { eventScenarios, type EventScenario } from "@/data/eventScenarios";
+import { eventScenarios } from "@/data/eventScenarios";
+import { ApiError, apiRequest } from "@/lib/api";
 import {
   Select,
   SelectContent,
@@ -11,114 +12,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-function buildSystemPrompt(s: EventScenario): string {
-  const panelContext = s.otherPanelists
-    ? `\nOther panelists: ${s.otherPanelists}`
-    : "";
-
-  return `You are an expert communications strategist at Edelman, one of the world's leading PR firms. You specialise in executive positioning for energy sector leaders.
-
-Your task is to write professional talking points for ${s.executive}, for a ${s.eventFormat.toLowerCase()} at ${s.eventName} in ${s.location}.
-
-EVENT DETAILS:
-- Event: ${s.eventName}
-- Date: ${s.date}
-- Location: ${s.location}
-- Format: ${s.eventFormat}
-- ${s.eventFormat === "Solo Interview" ? "Interviewer" : "Moderator"}: ${s.interviewer}
-- Duration: ${s.duration}${panelContext}
-
-ABOUT ENEC AND AL HAMMADI:
-- ENEC completed the Barakah Nuclear Energy Plant — 4 reactors, first in the Arab world, delivered in under 12 years and on budget
-- Barakah generates 25% of UAE electricity (up to 60% in winter), 40 TWh clean electricity annually
-- Prevents 22.4 million tons of carbon per annum
-- ENEC won the S&P Global Excellence in Energy — Power Award 2025 — first exclusively nuclear company in a decade
-- Al Hammadi chairs the World Nuclear Association
-- ENEC is exploring US market expansion, Philippines nuclear partnership, Sizewell C discussions
-- Al Hammadi's voice: confident, direct, globally ambitious, never defensive about nuclear
-
-TARGET AUDIENCE: ${s.targetAudience}
-
-OBJECTIVE: ${s.objective}
-
-KEY MESSAGES TO WEAVE IN:
-${s.keyMessages}
-
-TOPICS TO COVER:
-${s.anticipatedTopics}
-
-AVOID:
-${s.sensitivities}
-
-FORMAT YOUR RESPONSE AS FOLLOWS — use clean markdown:
-
-## Opening Statement
-One powerful 2-3 sentence opening that Al Hammadi can use to frame the ${s.eventFormat.toLowerCase()} on his terms.
-
-## Key Message 1
-- 2-3 talking points
-- 1 suggested soundbite (clearly labelled)
-
-## Key Message 2
-- 2-3 talking points
-- 1 suggested soundbite (clearly labelled)
-
-## Key Message 3
-- 2-3 talking points
-- 1 suggested soundbite (clearly labelled)
-
-## Anticipated Questions & Suggested Responses
-Q: [likely question]
-A: [suggested response — 3-4 sentences, in Al Hammadi's voice]
-
-Include 3 Q&A pairs covering the anticipated topics.
-
-## Points to Avoid / Redirect
-- 3 brief redirect strategies for sensitive topics
-
-Keep the tone confident, globally ambitious, and authoritative. Write in Al Hammadi's voice — direct, proud of ENEC's achievement, forward-looking.`;
+interface GenerateDocumentResponse {
+  document: string;
 }
 
-const EVAL_SYSTEM_PROMPT = `You are a senior communications strategist evaluating an executive positioning document against its brief objective. Be direct, specific, and actionable in your feedback.
-
-Evaluate the document provided against THREE dimensions. Respond ONLY in the following JSON format, no other text:
-
-{
-  "overall_score": [0-100],
-  "overall_verdict": "STRONG" or "NEEDS REFINEMENT",
-  "dimensions": {
-    "objective_fit": {
-      "score": [0-100],
-      "verdict": "[one line assessment]"
-    },
-    "messaging_cutthrough": {
-      "score": [0-100],
-      "verdict": "[one line assessment]"
-    },
-    "audience_resonance": {
-      "score": [0-100],
-      "verdict": "[one line assessment]"
-    }
-  },
-  "what_is_working": [
-    "[specific strength 1 with reference to document content]",
-    "[specific strength 2]",
-    "[specific strength 3]"
-  ],
-  "what_is_missing": [
-    "[specific gap 1 with actionable detail]",
-    "[specific gap 2]",
-    "[specific gap 3]"
-  ],
-  "priority_action": "[single most important edit, specific and actionable, max 2 sentences]"
-}`;
-
-const ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
-
-interface AnthropicMessagesResponse {
-  content?: Array<{
-    text?: string;
-  }>;
+interface EvaluateDocumentResponse {
+  evaluation: EvaluationData;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -138,8 +37,7 @@ const loadingSteps = [
 
 const BriefIntake = () => {
   const navigate = useNavigate();
-  const { setGeneratedDocument, setEvaluation, setSelectedEventId, setDocumentApproved, setApprovedBy } = useAppState();
-  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY?.trim();
+  const { logout, setGeneratedDocument, setEvaluation, setSelectedEventId, setDocumentApproved, setApprovedBy } = useAppState();
   const [loading, setLoading] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -157,11 +55,6 @@ const BriefIntake = () => {
   }, [setApprovedBy, setDocumentApproved, setEvaluation, setGeneratedDocument]);
 
   const handleGenerate = async () => {
-    if (!apiKey) {
-      setError("Set VITE_ANTHROPIC_API_KEY in a local .env file before generating documents.");
-      return;
-    }
-
     // Reset ALL generation state before every run
     setError(null);
     setGeneratedDocument(null);
@@ -180,65 +73,31 @@ const BriefIntake = () => {
 
     try {
       const currentScenario = eventScenarios.find((s) => s.id === scenarioId)!;
-      const systemPrompt = buildSystemPrompt(currentScenario);
-      console.log("Prompt preview:", systemPrompt.substring(0, 200));
-
-      const docRes = await fetch("https://api.anthropic.com/v1/messages", {
+      const docData = await apiRequest<GenerateDocumentResponse>("/api/documents/generate", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
+        json: {
+          scenario: currentScenario,
         },
-        body: JSON.stringify({
-          model: ANTHROPIC_MODEL,
-          max_tokens: 2000,
-          system: systemPrompt,
-          messages: [{ role: "user", content: "Generate the talking points based on the brief provided." }],
-        }),
       });
+      setGeneratedDocument(docData.document);
 
-      if (!docRes.ok) {
-        const errBody = await docRes.text();
-        throw new Error(`API error ${docRes.status}: ${errBody}`);
-      }
-
-      const docData: AnthropicMessagesResponse = await docRes.json();
-      const docText = docData.content?.[0]?.text || "";
-      setGeneratedDocument(docText);
-
-      const evalRes = await fetch("https://api.anthropic.com/v1/messages", {
+      const evalData = await apiRequest<EvaluateDocumentResponse>("/api/documents/evaluate", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
+        json: {
+          scenario: currentScenario,
+          documentText: docData.document,
         },
-        body: JSON.stringify({
-          model: ANTHROPIC_MODEL,
-          max_tokens: 1000,
-          system: EVAL_SYSTEM_PROMPT,
-          messages: [{ role: "user", content: `BRIEF OBJECTIVE: ${currentScenario.objective}\n\nTARGET AUDIENCE: ${currentScenario.targetAudience}\n\nKEY MESSAGES: ${currentScenario.keyMessages}\n\nDOCUMENT TO EVALUATE:\n${docText}` }],
-        }),
       });
-
-      if (evalRes.ok) {
-        const evalData: AnthropicMessagesResponse = await evalRes.json();
-        const evalText = evalData.content?.[0]?.text || "";
-        try {
-          const jsonStr = evalText.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
-          const parsed: EvaluationData = JSON.parse(jsonStr);
-          setEvaluation(parsed);
-        } catch (e) {
-          console.error("Failed to parse evaluation JSON:", e);
-          setEvaluation(null);
-        }
-      }
+      setEvaluation(evalData.evaluation);
 
       navigate("/document");
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.status === 401) {
+        await logout();
+        navigate("/login", { replace: true });
+        return;
+      }
+
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);

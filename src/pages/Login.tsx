@@ -6,16 +6,19 @@ const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
   const { isAuthConfigured, login } = useAppState();
 
-  const handleSignIn = (e: FormEvent<HTMLFormElement>) => {
+  const handleSignIn = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
+    setSubmitting(true);
 
-    const result = login(email, password);
+    const result = await login(email, password);
     if (!result.ok) {
       setError(result.error || "Unable to sign in.");
+      setSubmitting(false);
       return;
     }
 
@@ -40,7 +43,7 @@ const Login = () => {
         <form onSubmit={handleSignIn} className="space-y-4">
           {!isAuthConfigured && (
             <div className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              Set `VITE_APP_PASSWORD` in your local environment before using this login.
+              Set `APP_PASSWORD` on the server before using this login.
             </div>
           )}
           {error && (
@@ -74,10 +77,10 @@ const Login = () => {
           </div>
           <button
             type="submit"
-            disabled={!isAuthConfigured}
-            className="w-full h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors mt-2"
+            disabled={!isAuthConfigured || submitting}
+            className="w-full h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors mt-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Enter workspace
+            {submitting ? "Checking access..." : "Enter workspace"}
           </button>
         </form>
       </div>

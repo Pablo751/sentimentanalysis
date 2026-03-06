@@ -8,8 +8,8 @@ const Navigation = () => {
   const { generatedDocument, logout, selectedEventId, viewingDocId } = useAppState();
   const selectedEvent = eventScenarios.find((s) => s.id === selectedEventId);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate("/login");
   };
 

@@ -16,9 +16,19 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
+const AuthLoadingScreen = () => (
+  <div className="min-h-screen flex items-center justify-center bg-background px-6">
+    <p className="text-sm text-muted-foreground">Checking secure session...</p>
+  </div>
+);
+
 const RequireAuth = () => {
-  const { isAuthenticated } = useAppState();
+  const { authLoading, isAuthenticated } = useAppState();
   const location = useLocation();
+
+  if (authLoading) {
+    return <AuthLoadingScreen />;
+  }
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />;
@@ -28,7 +38,11 @@ const RequireAuth = () => {
 };
 
 const PublicOnlyRoute = () => {
-  const { hasSeenLoader, isAuthenticated } = useAppState();
+  const { authLoading, hasSeenLoader, isAuthenticated } = useAppState();
+
+  if (authLoading) {
+    return <AuthLoadingScreen />;
+  }
 
   if (isAuthenticated) {
     return <Navigate to={hasSeenLoader ? "/" : "/loading"} replace />;
@@ -39,9 +53,9 @@ const PublicOnlyRoute = () => {
 
 const AppLayout = () => {
   const location = useLocation();
-  const { isAuthenticated } = useAppState();
+  const { authLoading, isAuthenticated } = useAppState();
   const isLogin = location.pathname === "/login" || location.pathname === "/loading";
-  const hideNavigation = !isAuthenticated || isLogin;
+  const hideNavigation = authLoading || !isAuthenticated || isLogin;
 
   return (
     <>
