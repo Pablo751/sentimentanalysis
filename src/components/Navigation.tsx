@@ -5,11 +5,11 @@ import { eventScenarios } from "@/data/eventScenarios";
 const Navigation = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { generatedDocument, resetState, selectedEventId, viewingDocId } = useAppState();
+  const { generatedDocument, logout, selectedEventId, viewingDocId } = useAppState();
   const selectedEvent = eventScenarios.find((s) => s.id === selectedEventId);
 
   const handleLogout = () => {
-    resetState();
+    logout();
     navigate("/login");
   };
 

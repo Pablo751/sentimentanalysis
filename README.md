@@ -19,6 +19,8 @@ cp .env.example .env.local
 3. Add your Anthropic API key to `.env.local`:
 
 ```sh
+VITE_APP_EMAIL=you@yourcompany.com
+VITE_APP_PASSWORD=your-shared-password
 VITE_ANTHROPIC_API_KEY=your-key-here
 ```
 
@@ -41,5 +43,6 @@ The app runs on `http://localhost:8080` by default.
 ## Notes
 
 - The current generation flow calls Anthropic directly from the browser for local/demo usage.
+- The login screen is a client-side gate intended for simple privacy, not strong security.
 - Do not commit real `.env` files or API keys.
 - For production deployment, move model calls behind a server-side proxy.

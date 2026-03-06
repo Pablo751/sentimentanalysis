@@ -3,6 +3,14 @@ import { createContext, useContext, useState, ReactNode, useCallback } from "rea
 type DateRange = "7d" | "30d" | "90d";
 type DocStatus = "Pending Approval" | "Approved" | "Sent to Client";
 
+const AUTH_SESSION_KEY = "apex-authenticated";
+const AUTH_EMAIL_KEY = "apex-auth-email";
+
+interface LoginResult {
+  ok: boolean;
+  error?: string;
+}
+
 export interface RepositoryDocument {
   id: string;
   title: string;
@@ -54,6 +62,11 @@ interface AppState {
   setShowRepoSuccess: (v: boolean) => void;
   hasSeenLoader: boolean;
   setHasSeenLoader: (v: boolean) => void;
+  isAuthenticated: boolean;
+  authEmail: string;
+  isAuthConfigured: boolean;
+  login: (email: string, password: string) => LoginResult;
+  logout: () => void;
 }
 
 const INITIAL_DOCS: RepositoryDocument[] = [
@@ -112,6 +125,18 @@ const INITIAL_DOCS: RepositoryDocument[] = [
   },
 ];
 
+function getInitialDocuments(): RepositoryDocument[] {
+  return INITIAL_DOCS.map((doc) => ({ ...doc }));
+}
+
+function readSessionValue(key: string): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.sessionStorage.getItem(key);
+}
+
 const AppContext = createContext<AppState | null>(null);
 
 export const useAppState = () => {
@@ -121,16 +146,21 @@ export const useAppState = () => {
 };
 
 export const AppProvider = ({ children }: { children: ReactNode }) => {
+  const authPassword = import.meta.env.VITE_APP_PASSWORD?.trim();
+  const allowedEmail = import.meta.env.VITE_APP_EMAIL?.trim().toLowerCase();
   const [generatedDocument, setGeneratedDocument] = useState<string | null>(null);
   const [evaluation, setEvaluation] = useState<EvaluationData | null>(null);
   const [documentApproved, setDocumentApproved] = useState(false);
   const [approvedBy, setApprovedBy] = useState("");
   const [dateRange, setDateRange] = useState<DateRange>("30d");
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [documents, setDocuments] = useState<RepositoryDocument[]>(INITIAL_DOCS);
+  const [documents, setDocuments] = useState<RepositoryDocument[]>(getInitialDocuments);
   const [viewingDocId, setViewingDocId] = useState<string | null>(null);
   const [showRepoSuccess, setShowRepoSuccess] = useState(false);
   const [hasSeenLoader, setHasSeenLoader] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => readSessionValue(AUTH_SESSION_KEY) === "true");
+  const [authEmail, setAuthEmail] = useState(() => readSessionValue(AUTH_EMAIL_KEY) ?? "");
+  const isAuthConfigured = Boolean(authPassword);
 
   const addDocument = useCallback((doc: RepositoryDocument) => {
     setDocuments((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
@@ -140,16 +170,55 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, status } : d)));
   }, []);
 
-  const resetState = () => {
+  const resetState = useCallback(() => {
     setGeneratedDocument(null);
     setEvaluation(null);
     setDocumentApproved(false);
     setApprovedBy("");
     setDateRange("30d");
     setSelectedEventId(null);
+    setDocuments(getInitialDocuments());
     setViewingDocId(null);
+    setShowRepoSuccess(false);
     setHasSeenLoader(false);
-  };
+  }, []);
+
+  const login = useCallback((email: string, password: string): LoginResult => {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!authPassword) {
+      return { ok: false, error: "Set VITE_APP_PASSWORD before using the private login." };
+    }
+
+    if (allowedEmail && normalizedEmail !== allowedEmail) {
+      return { ok: false, error: "This email is not authorized for this workspace." };
+    }
+
+    if (password !== authPassword) {
+      return { ok: false, error: "Incorrect password." };
+    }
+
+    setAuthEmail(email.trim());
+    setIsAuthenticated(true);
+
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(AUTH_SESSION_KEY, "true");
+      window.sessionStorage.setItem(AUTH_EMAIL_KEY, email.trim());
+    }
+
+    return { ok: true };
+  }, [allowedEmail, authPassword]);
+
+  const logout = useCallback(() => {
+    resetState();
+    setAuthEmail("");
+    setIsAuthenticated(false);
+
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(AUTH_SESSION_KEY);
+      window.sessionStorage.removeItem(AUTH_EMAIL_KEY);
+    }
+  }, [resetState]);
 
   return (
     <AppContext.Provider
@@ -165,6 +234,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         viewingDocId, setViewingDocId,
         showRepoSuccess, setShowRepoSuccess,
         hasSeenLoader, setHasSeenLoader,
+        isAuthenticated,
+        authEmail,
+        isAuthConfigured,
+        login,
+        logout,
       }}
     >
       {children}
